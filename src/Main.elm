@@ -7,6 +7,7 @@ module Main exposing (main)
 -}
 
 import Browser
+import DateTime exposing (NaiveDateTime(..))
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
@@ -16,6 +17,7 @@ import Html exposing (Html)
 import Log exposing (..)
 import Style
 import TestData exposing (..)
+import Time exposing (Posix)
 import TypedTime exposing (..)
 
 
@@ -44,16 +46,6 @@ type TimerCommand
     | TCReset
 
 
-type EventGrouping
-    = NoGrouping
-    | GroupByDay
-
-
-type DateFilter
-    = NoDateFilter
-    | FilterByLast Int
-
-
 main =
     Browser.element
         { init = init
@@ -67,15 +59,28 @@ type alias Model =
     { input : String
     , output : String
     , logs : List Log
-    , currentLog : Maybe Log
-    , currentEvent : Maybe Event
+    , maybeCurrentLog : Maybe Log
+    , maybeCurrentEvent : Maybe Event
     , logFilterString : String
+    , appMode : AppMode
+    , currentTime : Posix
+    , dateFilter : DateFilter
+    , timeZoneOffset : Int
+    , filterState : EventGrouping
     }
+
+
+
+--
+-- MSG
+--
 
 
 type Msg
     = NoOp
     | GetEvents Int
+    | SetCurrentEvent Event
+    | SetGroupFilter EventGrouping
 
 
 type alias Flags =
@@ -87,9 +92,14 @@ init flags =
     ( { input = "App started"
       , output = "App started"
       , logs = [ TestData.log ]
-      , currentLog = Just TestData.log
-      , currentEvent = Just TestData.e1
+      , maybeCurrentLog = Just TestData.log
+      , maybeCurrentEvent = Just TestData.e1
       , logFilterString = ""
+      , appMode = Logging
+      , currentTime = Time.millisToPosix 0
+      , dateFilter = NoDateFilter
+      , timeZoneOffset = 5
+      , filterState = NoGrouping
       }
     , Cmd.none
     )
@@ -99,14 +109,31 @@ subscriptions model =
     Sub.none
 
 
+
+--
+-- UPDATE
+--
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         NoOp ->
             ( model, Cmd.none )
 
-        GetEvents id ->
-            ( model, Cmd.none )
+        GetEvents logId ->
+            let
+                maybeLog =
+                    List.filter (\log -> log.id == logId) model.logs
+                        |> List.head
+            in
+            ( { model | maybeCurrentEvent = Nothing, maybeCurrentLog = maybeLog }, Cmd.none )
+
+        SetCurrentEvent event_ ->
+            ( { model | maybeCurrentEvent = Just event_ }, Cmd.none )
+
+        SetGroupFilter filterState ->
+            ( { model | filterState = filterState }, Cmd.none )
 
 
 
@@ -122,9 +149,10 @@ view model =
 
 mainView : Model -> Element Msg
 mainView model =
-    column (Style.mainColumn fill fill ++ [ spacing 12, padding 40, Background.color (Style.makeGrey 0.9) ])
+    row (Style.mainColumn fill fill ++ [ spacing 12, padding 40, Background.color (Style.makeGrey 0.9) ])
         [ -- filterPanel model
           logListPanel model
+        , eventListDisplay model
         ]
 
 
@@ -141,38 +169,77 @@ mainView model =
 --         ]
 --
 --
--- eventPanel : Model -> Element Msg
--- eventPanel model =
---     case model.currentEventList of
---         Nothing ->
---             Element.none
---
---         Just eventList_ ->
---             let
---                 today =
---                     Utility.DateTime.naiveDateStringFromPosix sharedState.currentTime
---
---                 events2 =
---                     dateFilter today model.dateFilter eventList_
---
---                 events =
---                     case model.filterState of
---                         NoGrouping ->
---                             Data.correctTimeZone model.timeZoneOffset events2
---
---                         GroupByDay ->
---                             Data.eventsByDay model.timeZoneOffset events2
---             in
---             column [ Font.size 12, spacing 36, moveRight 40, width (px 450) ]
---                 [ row [ moveLeft 40 ] [ Graph.barChart (gA model) (prepareData (getScaleFactor model) events) |> Element.html ]
---                 , row [ spacing 16 ]
---                     [ row [ spacing 8 ] [ setMinutesButton model, setHoursButton model ]
---                     , row [ spacing 8 ] [ el [ Font.bold, Font.size 14 ] (text "Group:"), noFilterButton model, filterByDayButton model ]
---                     ]
---                 , newEventPanel 350 sharedState model
---                 ]
---
---
+
+
+eventListDisplay : Model -> Element Msg
+eventListDisplay model =
+    column [ spacing 20, height (px 450), width (px 350), Border.width 1 ]
+        [ viewLog model
+        ]
+
+
+viewLog : Model -> Element Msg
+viewLog model =
+    case model.maybeCurrentLog of
+        Nothing ->
+            column [ spacing 12, padding 20, height (px 500) ]
+                [ el [ Font.size 16, Font.bold ] (text "No events available")
+                ]
+
+        Just currentLog ->
+            let
+                today =
+                    DateTime.naiveDateStringFromPosix model.currentTime
+
+                events2 =
+                    Log.dateFilter today model.dateFilter currentLog.data
+
+                eventSum_ =
+                    Log.eventSum events2
+
+                events : List Event
+                events =
+                    groupingFilter model.timeZoneOffset model.filterState events2
+
+                nEvents =
+                    List.length events |> toFloat
+
+                average =
+                    TypedTime.multiply (1.0 / nEvents) eventSum_
+            in
+            column [ spacing 12, padding 20, height (px 430), scrollbarY ]
+                [ el [ Font.size 16, Font.bold ] (text (Maybe.map .name model.maybeCurrentLog |> Maybe.withDefault "XXX"))
+                , indexedTable [ spacing 4, Font.size 12 ]
+                    { data = events
+                    , columns =
+                        [ { header = el [ Font.bold ] (text "idx")
+                          , width = px (indexWidth model.appMode)
+                          , view = indexButton model
+                          }
+                        , { header = el [ Font.bold ] (text "Date")
+                          , width = px 80
+
+                          --, view = \k event -> el [ Font.size 12 ] (text <| dateStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.dateStringOfDateTimeString <| (\ndt -> DateTime.humanDateFromNaiveDateTime ndt) <| event.insertedAt)
+                          }
+                        , { header = el [ Font.bold ] (text "Time")
+                          , width = px 80
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.timeStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
+                          }
+                        , { header = el [ Font.bold ] (text "Value")
+                          , width = px 40
+                          , view = \k event -> el [ Font.size 12 ] (text <| TypedTime.timeAsStringWithUnit Minutes event.duration)
+                          }
+                        ]
+                    }
+                , row [ spacing 24, alignBottom, alignRight ]
+                    [ el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Average: " ++ TypedTime.timeAsStringWithUnit Minutes average)
+                    , el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Total: " ++ TypedTime.timeAsStringWithUnit Minutes eventSum_)
+                    ]
+                ]
+
+
+
 -- editPanel model =
 --     column [ spacing 12, width (px 300), alignTop ]
 --         [ el [ Font.size 16, Font.bold, alignTop ] (text "Edit Panel")
@@ -234,7 +301,7 @@ viewLogs model =
                   }
                 , { header = el [ Font.bold ] (text "Name")
                   , width = px 80
-                  , view = \k log -> el [ Font.size 12 ] (logNameButton model.currentLog log)
+                  , view = \k log -> el [ Font.size 12 ] (logNameButton model.maybeCurrentLog log)
                   }
                 ]
             }
@@ -246,4 +313,32 @@ logNameButton currentLog log =
     Input.button (Style.titleButton (currentLog == Just log))
         { onPress = Just (GetEvents log.id)
         , label = Element.text log.name
+        }
+
+
+indexWidth : AppMode -> Int
+indexWidth appMode =
+    case appMode of
+        Logging ->
+            30
+
+        Editing ->
+            60
+
+
+indexButton : Model -> Int -> Event -> Element Msg
+indexButton model k event =
+    case model.appMode of
+        Logging ->
+            el [ Font.size 12 ] (text <| String.fromInt <| k + 1)
+
+        Editing ->
+            setCurrentEventButton model event k
+
+
+setCurrentEventButton : Model -> Event -> Int -> Element Msg
+setCurrentEventButton model event index =
+    Input.button (Style.titleButton (Just event == model.maybeCurrentEvent))
+        { onPress = Just (SetCurrentEvent event)
+        , label = el [ Font.bold ] (Element.text <| String.fromInt index ++ ": " ++ String.fromInt event.id)
         }

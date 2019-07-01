@@ -1,4 +1,25 @@
-module TypedTime exposing (HMRecord, HMSRecord, TypedTime(..), Unit(..), convertFromSecondsWithUnit, convertScalarToSecondsWithUnit, convertTo, convertToSeconds, decodeHM, hmRecordFromSeconds, hmStringFromSeconds, hmsRecordFromSeconds, hmsStringFromSeconds, multiply, parseHM, parseInt, parseInt_, parseTime, timeAsStringWithUnit)
+module TypedTime exposing
+    ( HMRecord
+    , HMSRecord
+    , TypedTime(..)
+    , Unit(..)
+    , convertFromSecondsWithUnit
+    , convertScalarToSecondsWithUnit
+    , convertTo
+    , convertToSeconds
+    , decodeHM
+    , hmRecordFromSeconds
+    , hmStringFromSeconds
+    , hmsRecordFromSeconds
+    , hmsStringFromSeconds
+    , multiply
+    , parseHM
+    , parseInt
+    , parseInt_
+    , parseTime
+    , sum
+    , timeAsStringWithUnit
+    )
 
 import Parser exposing (..)
 
@@ -18,6 +39,14 @@ type Unit
     = Seconds
     | Minutes
     | Hours
+
+
+sum : List TypedTime -> TypedTime
+sum timeList =
+    timeList
+        |> List.map convertToSeconds
+        |> List.sum
+        |> TypedTime Seconds
 
 
 multiply : Float -> TypedTime -> TypedTime

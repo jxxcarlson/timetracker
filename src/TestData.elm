@@ -1,5 +1,6 @@
 module TestData exposing (e1, e2, log)
 
+import DateTime exposing (NaiveDateTime(..))
 import Log exposing (..)
 import Time exposing (Posix)
 import TypedTime exposing (..)
@@ -10,9 +11,9 @@ e1 =
     { id = 1
     , name = "Scales"
     , note = "--"
-    , startTime = Time.millisToPosix 0
+    , startTime = DateTime.NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
     , duration = TypedTime Minutes 11.4
-    , insertedAt = Time.millisToPosix 0
+    , insertedAt = NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
     }
 
 
@@ -21,9 +22,9 @@ e2 =
     { id = 1
     , name = "Finger exercises"
     , note = "--"
-    , startTime = Time.millisToPosix 0
+    , startTime = NaiveDateTime <| DateTime.naiveDateStringFromPosix (Time.millisToPosix 1561993648)
     , duration = TypedTime Minutes 4.1
-    , insertedAt = Time.millisToPosix 0
+    , insertedAt = NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
     }
 
 

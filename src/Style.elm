@@ -13,6 +13,7 @@ module Style exposing
     , footerForPhone
     , footerItem
     , grey
+    , headerButton
     , inactiveButton
     , lightGrey
     , listElementButtonStyleWithWidth2
@@ -77,6 +78,11 @@ buttonWithWidth width_ =
 button : List (Element.Attr () msg)
 button =
     [ Background.color black, Font.color white, Element.paddingXY 10 6 ] ++ basicButtonsStyle
+
+
+headerButton : List (Element.Attr () msg)
+headerButton =
+    [ Background.color white, Font.color black, Element.paddingXY 10 6 ] ++ basicButtonsStyle
 
 
 inactiveButton : List (Element.Attr () msg)

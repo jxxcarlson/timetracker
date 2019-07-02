@@ -31,9 +31,23 @@ import TypedTime exposing (..)
 
 
 type AppMode
-    = DisplayLogs
-    | Logging
+    = Logging
     | Editing
+
+
+type Visibility
+    = Visible
+    | Hidden
+
+
+toggleVisibility : Visibility -> Visibility
+toggleVisibility vis =
+    case vis of
+        Visible ->
+            Hidden
+
+        Hidden ->
+            Visible
 
 
 type PhoneAppMode
@@ -86,6 +100,7 @@ type alias Model =
     , maybeCurrentEvent : Maybe Event
     , logFilterString : String
     , appMode : AppMode
+    , visibilityOfLogList : Visibility
     , beginTime : Maybe Posix
     , currentTime : Posix
     , elapsedTime : TypedTime
@@ -110,11 +125,12 @@ init flags =
     ( { input = "App started"
       , message = "App started"
       , eventDurationString = ""
-      , logs = [ TestData.log ]
+      , logs = [ TestData.log, TestData.log2 ]
       , maybeCurrentLog = Just TestData.log
       , maybeCurrentEvent = Just TestData.e1
       , logFilterString = ""
       , appMode = Logging
+      , visibilityOfLogList = Visible
       , currentTime = Time.millisToPosix 0
       , beginTime = Nothing
       , doUpdateElapsedTime = False
@@ -142,6 +158,7 @@ type Msg
     | SetCurrentEvent Event
     | SetGroupFilter EventGrouping
     | SetUnits Unit
+    | ToggleLogs
       --
     | TimeChange Posix
     | TC TimerCommand
@@ -169,6 +186,10 @@ update msg model =
     case msg of
         NoOp ->
             ( model, Cmd.none )
+
+        -- UI
+        ToggleLogs ->
+            ( { model | visibilityOfLogList = toggleVisibility model.visibilityOfLogList }, Cmd.none )
 
         -- EVENTS
         GotValueString str ->
@@ -202,9 +223,7 @@ update msg model =
                             ( { model | message = "Bad format for time" }, Cmd.none )
 
                         Just duration ->
-                            ( { model | message = "Making new event for log " ++ String.fromInt log.id }
-                            , makeEvent log.id duration
-                            )
+                            ( createEvent (TypedTime Seconds duration) model, Cmd.none )
 
         -- TIMER
         TimeChange time ->
@@ -258,29 +277,10 @@ update msg model =
 
                 TCLog ->
                     let
-                        newEvent =
-                            { note = ""
-                            , id = -1
-                            , duration = TypedTime.sum [ model.accumulatedTime, model.elapsedTime ]
-                            , insertedAt = model.currentTime
-                            }
+                        duration =
+                            TypedTime.sum [ model.accumulatedTime, model.elapsedTime ]
                     in
-                    case model.maybeCurrentLog of
-                        Nothing ->
-                            ( { model | timerState = TSInitial }, Cmd.none )
-
-                        Just currentLog ->
-                            let
-                                newLog =
-                                    { currentLog | data = newEvent :: currentLog.data }
-                            in
-                            ( { model
-                                | timerState = TSInitial
-                                , doUpdateElapsedTime = False
-                                , maybeCurrentLog = Just newLog
-                              }
-                            , Cmd.none
-                            )
+                    ( createEvent duration model, Cmd.none )
 
                 TCReset ->
                     ( { model
@@ -294,13 +294,7 @@ update msg model =
                     )
 
 
-makeEvent : Int -> Float -> Cmd Msg
-makeEvent logId value =
-    Cmd.none
 
-
-
--- for persistence
 --
 -- VIEW
 --
@@ -313,12 +307,146 @@ view model =
 
 mainView : Model -> Element Msg
 mainView model =
+    column []
+        [ header model
+        , mainRow model
+        ]
+
+
+
+--
+-- HEADER
+--
+
+
+header : Model -> Element Msg
+header model =
+    row
+        [ width fill
+        , paddingXY 40 8
+        , Background.color Style.charcoal
+        ]
+        [ toggleLogsButton model ]
+
+
+toggleLogsButton : Model -> Element Msg
+toggleLogsButton model =
+    let
+        message =
+            showOne (model.visibilityOfLogList == Visible) "Hide Logs" "Show Logs"
+    in
+    Input.button Style.headerButton
+        { onPress = Just ToggleLogs
+        , label = Element.text message
+        }
+
+
+
+--
+-- MAIN ROW
+--
+
+
+mainRow : Model -> Element Msg
+mainRow model =
     row (Style.mainColumn fill fill ++ [ spacing 12, padding 40, Background.color (Style.makeGrey 0.9) ])
         [ -- filterPanel model
-          logListPanel model
+          showIf (model.visibilityOfLogList == Visible) (logListPanel model)
         , eventListDisplay model
         , eventPanel model
         ]
+
+
+showIf : Bool -> Element Msg -> Element Msg
+showIf bit element =
+    if bit then
+        element
+
+    else
+        Element.none
+
+
+showOne : Bool -> String -> String -> String
+showOne bit str1 str2 =
+    case bit of
+        True ->
+            str1
+
+        False ->
+            str2
+
+
+
+--
+-- VIEWLOGS
+--
+
+
+viewLog : Model -> Element Msg
+viewLog model =
+    case model.maybeCurrentLog of
+        Nothing ->
+            column [ spacing 12, padding 20, height (px 500) ]
+                [ el [ Font.size 16, Font.bold ] (text "No events available")
+                ]
+
+        Just currentLog ->
+            let
+                today =
+                    model.currentTime
+
+                events2 =
+                    Log.dateFilter today model.dateFilter currentLog.data
+
+                eventSum_ =
+                    Log.eventSum events2
+
+                events : List Event
+                events =
+                    groupingFilter model.filterState events2
+
+                nEvents =
+                    List.length events |> toFloat
+
+                average =
+                    TypedTime.multiply (1.0 / nEvents) eventSum_
+            in
+            column [ spacing 12, padding 20, height (px 430), scrollbarY ]
+                [ el [ Font.size 16, Font.bold ] (text (Maybe.map .name model.maybeCurrentLog |> Maybe.withDefault "XXX"))
+                , indexedTable [ spacing 4, Font.size 12 ]
+                    { data = events
+                    , columns =
+                        [ { header = el [ Font.bold ] (text "idx")
+                          , width = px (indexWidth model.appMode)
+                          , view = indexButton model
+                          }
+                        , { header = el [ Font.bold ] (text "Date")
+                          , width = px 80
+
+                          --, view = \k event -> el [ Font.size 12 ] (text <| dateStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
+                          }
+                        , { header = el [ Font.bold ] (text "Time")
+                          , width = px 80
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
+                          }
+                        , { header = el [ Font.bold ] (text "Value")
+                          , width = px 40
+                          , view = \k event -> el [ Font.size 12 ] (text <| TypedTime.timeAsStringWithUnit Minutes event.duration)
+                          }
+                        ]
+                    }
+                , row [ spacing 24, alignBottom, alignRight ]
+                    [ el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Average: " ++ TypedTime.timeAsStringWithUnit Minutes average)
+                    , el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Total: " ++ TypedTime.timeAsStringWithUnit Minutes eventSum_)
+                    ]
+                ]
+
+
+
+--
+-- VIEWEVENTS
+--
 
 
 eventPanel : Model -> Element Msg
@@ -351,6 +479,39 @@ eventPanel model =
                     ]
                 , newEventPanel 350 model
                 ]
+
+
+
+--
+--
+--
+
+
+newEventPanel : Int -> Model -> Element Msg
+newEventPanel w model =
+    column [ Border.width 1, padding 12, spacing 24, width (px w) ]
+        [ row [ spacing 12 ] [ submitEventButton, inputEventDuration model ]
+        , largeElapsedTimePanel model
+        ]
+
+
+prepareData : Float -> List Event -> List Float
+prepareData scaleFactor_ eventList =
+    List.map (floatValueOfEvent scaleFactor_) eventList
+
+
+floatValueOfEvent : Float -> Event -> Float
+floatValueOfEvent scaleFactor_ event =
+    event |> .duration |> convertToSeconds |> (\x -> x / scaleFactor_)
+
+
+inputEventDuration model =
+    Input.text inputStyle
+        { onChange = GotValueString
+        , text = model.eventDurationString
+        , placeholder = Nothing
+        , label = Input.labelLeft [ Font.size 14, moveDown 8 ] (text "")
+        }
 
 
 submitEventButton : Element Msg
@@ -393,6 +554,12 @@ filterByDayButton model =
         }
 
 
+
+--
+-- TIMER
+--
+
+
 largeElapsedTimePanel : Model -> Element Msg
 largeElapsedTimePanel model =
     column [ spacing 12 ]
@@ -409,12 +576,6 @@ timerControls model =
         , resetTimerButton
         , logTimerButton
         ]
-
-
-
---
--- TIMER BUTTONS
---
 
 
 {-| xxx
@@ -521,16 +682,6 @@ gA model =
     }
 
 
-prepareData : Float -> List Event -> List Float
-prepareData scaleFactor_ eventList =
-    List.map (floatValueOfEvent scaleFactor_) eventList
-
-
-floatValueOfEvent : Float -> Event -> Float
-floatValueOfEvent scaleFactor_ event =
-    event |> .duration |> convertToSeconds |> (\x -> x / scaleFactor_)
-
-
 getScaleFactor : Model -> Float
 getScaleFactor model =
     case model.outputUnit of
@@ -542,35 +693,6 @@ getScaleFactor model =
 
         Hours ->
             3600.0
-
-
-
---
---
---
-
-
-newEventPanel : Int -> Model -> Element Msg
-newEventPanel w model =
-    column [ Border.width 1, padding 12, spacing 24, width (px w) ]
-        [ row [ spacing 12 ] [ submitEventButton, inputEventDuration model ]
-        , largeElapsedTimePanel model
-        ]
-
-
-
---
--- TIMER HELPERS
---
-
-
-inputEventDuration model =
-    Input.text inputStyle
-        { onChange = GotValueString
-        , text = model.eventDurationString
-        , placeholder = Nothing
-        , label = Input.labelLeft [ Font.size 14, moveDown 8 ] (text "")
-        }
 
 
 inputStyle =
@@ -608,67 +730,6 @@ eventListDisplay model =
     column [ spacing 20, height (px 450), width (px 350), Border.width 1 ]
         [ viewLog model
         ]
-
-
-viewLog : Model -> Element Msg
-viewLog model =
-    case model.maybeCurrentLog of
-        Nothing ->
-            column [ spacing 12, padding 20, height (px 500) ]
-                [ el [ Font.size 16, Font.bold ] (text "No events available")
-                ]
-
-        Just currentLog ->
-            let
-                today =
-                    model.currentTime
-
-                events2 =
-                    Log.dateFilter today model.dateFilter currentLog.data
-
-                eventSum_ =
-                    Log.eventSum events2
-
-                events : List Event
-                events =
-                    groupingFilter model.filterState events2
-
-                nEvents =
-                    List.length events |> toFloat
-
-                average =
-                    TypedTime.multiply (1.0 / nEvents) eventSum_
-            in
-            column [ spacing 12, padding 20, height (px 430), scrollbarY ]
-                [ el [ Font.size 16, Font.bold ] (text (Maybe.map .name model.maybeCurrentLog |> Maybe.withDefault "XXX"))
-                , indexedTable [ spacing 4, Font.size 12 ]
-                    { data = events
-                    , columns =
-                        [ { header = el [ Font.bold ] (text "idx")
-                          , width = px (indexWidth model.appMode)
-                          , view = indexButton model
-                          }
-                        , { header = el [ Font.bold ] (text "Date")
-                          , width = px 80
-
-                          --, view = \k event -> el [ Font.size 12 ] (text <| dateStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
-                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
-                          }
-                        , { header = el [ Font.bold ] (text "Time")
-                          , width = px 80
-                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
-                          }
-                        , { header = el [ Font.bold ] (text "Value")
-                          , width = px 40
-                          , view = \k event -> el [ Font.size 12 ] (text <| TypedTime.timeAsStringWithUnit Minutes event.duration)
-                          }
-                        ]
-                    }
-                , row [ spacing 24, alignBottom, alignRight ]
-                    [ el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Average: " ++ TypedTime.timeAsStringWithUnit Minutes average)
-                    , el [ moveLeft 10, Font.size 16, Font.bold ] (text <| "Total: " ++ TypedTime.timeAsStringWithUnit Minutes eventSum_)
-                    ]
-                ]
 
 
 
@@ -751,9 +812,6 @@ logNameButton currentLog log =
 indexWidth : AppMode -> Int
 indexWidth appMode =
     case appMode of
-        DisplayLogs ->
-            30
-
         Logging ->
             30
 
@@ -764,9 +822,6 @@ indexWidth appMode =
 indexButton : Model -> Int -> Event -> Element Msg
 indexButton model k event =
     case model.appMode of
-        DisplayLogs ->
-            el [ Font.size 12 ] (text <| String.fromInt <| k + 1)
-
         Logging ->
             el [ Font.size 12 ] (text <| String.fromInt <| k + 1)
 
@@ -780,3 +835,35 @@ setCurrentEventButton model event index =
         { onPress = Just (SetCurrentEvent event)
         , label = el [ Font.bold ] (Element.text <| String.fromInt index ++ ": " ++ String.fromInt event.id)
         }
+
+
+
+--
+-- UPDATE HELPERS
+--
+
+
+createEvent : TypedTime -> Model -> Model
+createEvent duration model =
+    let
+        newEvent =
+            { note = ""
+            , id = -1
+            , duration = duration
+            , insertedAt = model.currentTime
+            }
+    in
+    case model.maybeCurrentLog of
+        Nothing ->
+            { model | timerState = TSInitial }
+
+        Just currentLog ->
+            let
+                newLog =
+                    { currentLog | data = currentLog.data ++ [ newEvent ] }
+            in
+            { model
+                | timerState = TSInitial
+                , doUpdateElapsedTime = False
+                , maybeCurrentLog = Just newLog
+            }

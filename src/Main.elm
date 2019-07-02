@@ -7,12 +7,14 @@ module Main exposing (main)
 -}
 
 import Browser
+import Date exposing (Date)
 import DateTime exposing (NaiveDateTime(..))
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
+import Graph exposing (Option(..))
 import Html exposing (Html)
 import Log exposing (..)
 import Style
@@ -55,19 +57,57 @@ main =
         }
 
 
+
+--
+-- MODEL
+--
+
+
 type alias Model =
     { input : String
-    , output : String
+    , message : String
+    , valueString : String
     , logs : List Log
     , maybeCurrentLog : Maybe Log
     , maybeCurrentEvent : Maybe Event
     , logFilterString : String
     , appMode : AppMode
+    , beginTime : Maybe Posix
     , currentTime : Posix
+    , elapsedTime : Float
+    , doUpdateElapsedTime : Bool
+    , accumulatedTime : Float
+    , timerState : TimerState
     , dateFilter : DateFilter
     , timeZoneOffset : Int
     , filterState : EventGrouping
+    , outputUnit : Unit
     }
+
+
+init : Flags -> ( Model, Cmd Msg )
+init flags =
+    ( { input = "App started"
+      , message = "App started"
+      , valueString = ""
+      , logs = [ TestData.log ]
+      , maybeCurrentLog = Just TestData.log
+      , maybeCurrentEvent = Just TestData.e1
+      , logFilterString = ""
+      , appMode = Logging
+      , currentTime = Time.millisToPosix 0
+      , beginTime = Nothing
+      , doUpdateElapsedTime = False
+      , elapsedTime = 0
+      , accumulatedTime = 0
+      , dateFilter = NoDateFilter
+      , timeZoneOffset = 5
+      , timerState = TSInitial
+      , filterState = NoGrouping
+      , outputUnit = Hours
+      }
+    , Cmd.none
+    )
 
 
 
@@ -81,28 +121,21 @@ type Msg
     | GetEvents Int
     | SetCurrentEvent Event
     | SetGroupFilter EventGrouping
+    | SetUnits Unit
+      --
+    | TC TimerCommand
+    | UpdateTime Posix
+    | UpdateElapsedTime Float
+    | BeginTimer
+    | PauseTimer
+    | ContinueTimer
+    | ResetTimer
+    | GotValueString String
+    | MakeEvent
 
 
 type alias Flags =
     {}
-
-
-init : Flags -> ( Model, Cmd Msg )
-init flags =
-    ( { input = "App started"
-      , output = "App started"
-      , logs = [ TestData.log ]
-      , maybeCurrentLog = Just TestData.log
-      , maybeCurrentEvent = Just TestData.e1
-      , logFilterString = ""
-      , appMode = Logging
-      , currentTime = Time.millisToPosix 0
-      , dateFilter = NoDateFilter
-      , timeZoneOffset = 5
-      , filterState = NoGrouping
-      }
-    , Cmd.none
-    )
 
 
 subscriptions model =
@@ -121,6 +154,9 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
+        GotValueString str ->
+            ( { model | valueString = str }, Cmd.none )
+
         GetEvents logId ->
             let
                 maybeLog =
@@ -135,8 +171,92 @@ update msg model =
         SetGroupFilter filterState ->
             ( { model | filterState = filterState }, Cmd.none )
 
+        SetUnits unit ->
+            ( { model | outputUnit = unit }, Cmd.none )
+
+        MakeEvent ->
+            case model.maybeCurrentLog of
+                Nothing ->
+                    ( { model | message = "No log available to make event" }, Cmd.none )
+
+                Just log ->
+                    case TypedTime.decodeHM model.valueString of
+                        Nothing ->
+                            ( { model | message = "Bad format for time" }, Cmd.none )
+
+                        Just duration ->
+                            ( { model | message = "Making new event for log " ++ String.fromInt log.id }
+                            , makeEvent log.id duration
+                            )
+
+        UpdateTime time ->
+            ( { model
+                | currentTime = time
+                , elapsedTime =
+                    if model.doUpdateElapsedTime then
+                        elapsedTimeInSeconds model
+
+                    else
+                        model.elapsedTime
+              }
+            , Cmd.none
+            )
+
+        UpdateElapsedTime et ->
+            ( { model | elapsedTime = et }, Cmd.none )
+
+        BeginTimer ->
+            ( { model | beginTime = Just model.currentTime, elapsedTime = 0, accumulatedTime = 0, doUpdateElapsedTime = True }, Cmd.none )
+
+        PauseTimer ->
+            ( { model
+                | beginTime = Just model.currentTime
+                , elapsedTime = 0
+                , doUpdateElapsedTime = False
+              }
+            , Cmd.none
+            )
+
+        ContinueTimer ->
+            ( { model | beginTime = Just model.currentTime, doUpdateElapsedTime = True }, Cmd.none )
+
+        ResetTimer ->
+            ( { model | beginTime = Just model.currentTime, doUpdateElapsedTime = False, elapsedTime = 0, accumulatedTime = 0 }, Cmd.none )
+
+        TC timerCommand ->
+            case timerCommand of
+                TCStart ->
+                    ( { model | timerState = TSRunning }, Cmd.none )
+
+                TCPause ->
+                    ( { model | timerState = TSPaused }, Cmd.none )
+
+                TCContinue ->
+                    ( { model | timerState = TSRunning }, Cmd.none )
+
+                TCLog ->
+                    let
+                        cmd =
+                            case model.maybeCurrentLog of
+                                Nothing ->
+                                    Cmd.none
+
+                                Just log ->
+                                    makeEvent log.id (TypedTime.convertScalarToSecondsWithUnit model.outputUnit (model.accumulatedTime + model.elapsedTime))
+                    in
+                    ( { model | timerState = TSInitial }, cmd )
+
+                TCReset ->
+                    ( { model | timerState = TSInitial }, Cmd.none )
 
 
+makeEvent : Int -> Float -> Cmd Msg
+makeEvent logId value =
+    Cmd.none
+
+
+
+-- for persistence
 --
 -- VIEW
 --
@@ -153,7 +273,283 @@ mainView model =
         [ -- filterPanel model
           logListPanel model
         , eventListDisplay model
+        , eventPanel model
         ]
+
+
+eventPanel : Model -> Element Msg
+eventPanel model =
+    case model.maybeCurrentLog of
+        Nothing ->
+            Element.none
+
+        Just currentLog ->
+            let
+                today =
+                    DateTime.naiveDateStringFromPosix model.currentTime
+
+                events2 =
+                    dateFilter today model.dateFilter currentLog.data
+
+                events =
+                    case model.filterState of
+                        NoGrouping ->
+                            Log.correctTimeZone model.timeZoneOffset events2
+
+                        GroupByDay ->
+                            Log.eventsByDay model.timeZoneOffset events2
+            in
+            column [ Font.size 12, spacing 36, moveRight 40, width (px 450) ]
+                [ row [ moveLeft 40 ] [ Graph.barChart (gA model) (prepareData (getScaleFactor model) events) |> Element.html ]
+                , row [ spacing 16 ]
+                    [ row [ spacing 8 ] [ setMinutesButton model, setHoursButton model ]
+                    , row [ spacing 8 ] [ el [ Font.bold, Font.size 14 ] (text "Group:"), noFilterButton model, filterByDayButton model ]
+                    ]
+                , newEventPanel 350 model
+                ]
+
+
+submitEventButton : Element Msg
+submitEventButton =
+    Input.button Style.button
+        { onPress = Just MakeEvent
+        , label = Element.text "New event"
+        }
+
+
+setMinutesButton : Model -> Element Msg
+setMinutesButton model =
+    Input.button (Style.activeButton (model.outputUnit == Minutes))
+        { onPress = Just (SetUnits Minutes)
+        , label = el [ Font.size 12 ] (text "Minutes")
+        }
+
+
+setHoursButton : Model -> Element Msg
+setHoursButton model =
+    Input.button (Style.activeButton (model.outputUnit == Hours))
+        { onPress = Just (SetUnits Hours)
+        , label = el [ Font.size 12 ] (text "Hours")
+        }
+
+
+noFilterButton : Model -> Element Msg
+noFilterButton model =
+    Input.button (Style.activeButton (model.filterState == NoGrouping))
+        { onPress = Just (SetGroupFilter NoGrouping)
+        , label = el [ Font.size 12 ] (text "None")
+        }
+
+
+filterByDayButton : Model -> Element Msg
+filterByDayButton model =
+    Input.button (Style.activeButton (model.filterState == GroupByDay))
+        { onPress = Just (SetGroupFilter GroupByDay)
+        , label = el [ Font.size 12 ] (text "By day")
+        }
+
+
+largeElapsedTimePanel : Model -> Element Msg
+largeElapsedTimePanel model =
+    column [ spacing 12 ]
+        [ timerDisplay model
+        , timerControls model
+        ]
+
+
+timerControls : Model -> Element Msg
+timerControls model =
+    row [ spacing 12, Font.size 12, width fill ]
+        [ startTimerButton
+        , pauseTimerButton model
+        , resetTimerButton
+        , logTimerButton
+        ]
+
+
+
+--
+-- TIMER BUTTONS
+--
+
+
+{-| xxx
+-}
+startTimerButton : Element Msg
+startTimerButton =
+    Input.button Style.button
+        { onPress = Just (TC TCStart)
+        , label = el [ Font.size 14 ] (text "Start")
+        }
+
+
+pauseTimerButton : Model -> Element Msg
+pauseTimerButton model =
+    case model.timerState of
+        TSPaused ->
+            Input.button Style.smallButton
+                { onPress = Just (TC TCContinue)
+                , label = el [ Font.size 14 ] (text "Cont")
+                }
+
+        _ ->
+            Input.button Style.button
+                { onPress = Just (TC TCPause)
+                , label = el [ Font.size 14 ] (text "Pause")
+                }
+
+
+resetTimerButton : Element Msg
+resetTimerButton =
+    Input.button Style.button
+        { onPress = Just (TC TCReset)
+        , label = el [ Font.size 14 ] (text "Reset")
+        }
+
+
+logTimerButton : Element Msg
+logTimerButton =
+    Input.button Style.button
+        { onPress = Just (TC TCLog)
+        , label = el [ Font.size 12 ] (text "Log")
+        }
+
+
+timerDisplay model =
+    row [ spacing 8 ]
+        [ el [ Font.size 36, Font.bold, padding 8, Font.color Style.red, Background.color Style.black ]
+            (text <| timeStringFromFloat <| (model.accumulatedTime + model.elapsedTime) / scaleFactor)
+        ]
+
+
+timeStringFromFloat : Float -> String
+timeStringFromFloat t_ =
+    let
+        t =
+            round t_
+
+        s =
+            modBy 60 t
+
+        m =
+            (t - s) // 60
+
+        h =
+            m // 60
+
+        ss =
+            String.pad 2 '0' (String.fromInt s)
+
+        ms =
+            String.pad 2 '0' (String.fromInt <| modBy 60 m)
+
+        hs =
+            String.pad 2 '0' (String.fromInt <| h)
+    in
+    hs ++ ":" ++ ms ++ ":" ++ ss
+
+
+scaleFactor =
+    1
+
+
+
+--
+-- GRAPH HELPERS
+--
+
+
+gA model =
+    let
+        yTickMarks_ =
+            4
+    in
+    { graphHeight = 200
+    , graphWidth = 400
+    , options = [ Color "blue", XTickmarks 7, YTickmarks yTickMarks_, DeltaX 10 ]
+    }
+
+
+prepareData : Float -> List Event -> List Float
+prepareData scaleFactor_ eventList =
+    List.map (floatValueOfEvent scaleFactor_) eventList
+
+
+floatValueOfEvent : Float -> Event -> Float
+floatValueOfEvent scaleFactor_ event =
+    event |> .duration |> convertToSeconds |> (\x -> x / scaleFactor_)
+
+
+getScaleFactor : Model -> Float
+getScaleFactor model =
+    case model.outputUnit of
+        Seconds ->
+            1
+
+        Minutes ->
+            60.0
+
+        Hours ->
+            3600.0
+
+
+
+--
+--
+--
+
+
+newEventPanel : Int -> Model -> Element Msg
+newEventPanel w model =
+    column [ Border.width 1, padding 12, spacing 24, width (px w) ]
+        [ row [ spacing 12 ] [ submitEventButton, inputValue model ]
+        , largeElapsedTimePanel model
+        ]
+
+
+
+--
+-- TIMER HELPERS
+--
+
+
+inputValue model =
+    Input.text inputStyle
+        { onChange = GotValueString
+        , text = model.valueString
+        , placeholder = Nothing
+        , label = Input.labelLeft [ Font.size 14, moveDown 8 ] (text "")
+        }
+
+
+inputStyle =
+    [ width (px 60)
+    , height (px 30)
+    , Background.color (Style.makeGrey 0.8)
+    , Font.color Style.black
+    , Font.size 12
+    , Border.width 2
+    ]
+
+
+elapsedTimeInSeconds : Model -> Float
+elapsedTimeInSeconds model =
+    case model.beginTime of
+        Nothing ->
+            0
+
+        Just bt ->
+            let
+                seconds2 =
+                    Time.posixToMillis model.currentTime |> toFloat
+
+                seconds1 =
+                    Time.posixToMillis bt |> toFloat
+
+                dt =
+                    seconds2 - seconds1
+            in
+            dt / 1000.0
 
 
 

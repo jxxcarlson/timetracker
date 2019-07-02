@@ -1,4 +1,15 @@
-module Log exposing (DateFilter(..), Event, EventGrouping(..), Log, dateFilter, eventSum, filter, groupingFilter)
+module Log exposing
+    ( DateFilter(..)
+    , Event
+    , EventGrouping(..)
+    , Log
+    , correctTimeZone
+    , dateFilter
+    , eventSum
+    , eventsByDay
+    , filter
+    , groupingFilter
+    )
 
 import DateTime exposing (NaiveDateTime(..))
 import List.Extra as LE

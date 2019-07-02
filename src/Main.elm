@@ -237,15 +237,29 @@ update msg model =
 
                 TCLog ->
                     let
-                        cmd =
-                            case model.maybeCurrentLog of
-                                Nothing ->
-                                    Cmd.none
-
-                                Just log ->
-                                    makeEvent log.id (TypedTime.convertToSeconds <| TypedTime.sum [ model.accumulatedTime, model.elapsedTime ])
+                        newEvent =
+                            { note = ""
+                            , id = -1
+                            , duration = TypedTime.sum [ model.accumulatedTime, model.elapsedTime ]
+                            , insertedAt = model.currentTime
+                            }
                     in
-                    ( { model | timerState = TSInitial }, cmd )
+                    case model.maybeCurrentLog of
+                        Nothing ->
+                            ( { model | timerState = TSInitial }, Cmd.none )
+
+                        Just currentLog ->
+                            let
+                                newLog =
+                                    { currentLog | data = newEvent :: currentLog.data }
+                            in
+                            ( { model
+                                | timerState = TSInitial
+                                , doUpdateElapsedTime = False
+                                , maybeCurrentLog = Just newLog
+                              }
+                            , Cmd.none
+                            )
 
                 TCReset ->
                     ( { model
@@ -298,15 +312,15 @@ eventPanel model =
                     DateTime.naiveDateStringFromPosix model.currentTime
 
                 events2 =
-                    dateFilter today model.dateFilter currentLog.data
+                    dateFilter model.currentTime model.dateFilter currentLog.data
 
                 events =
                     case model.filterState of
                         NoGrouping ->
-                            Log.correctTimeZone model.timeZoneOffset events2
+                            events2
 
                         GroupByDay ->
-                            Log.eventsByDay model.timeZoneOffset events2
+                            Log.eventsByDay events2
             in
             column [ Font.size 12, spacing 36, moveRight 40, width (px 450) ]
                 [ row [ moveLeft 40 ] [ Graph.barChart (gA model) (prepareData (getScaleFactor model) events) |> Element.html ]
@@ -586,7 +600,7 @@ viewLog model =
         Just currentLog ->
             let
                 today =
-                    DateTime.naiveDateStringFromPosix model.currentTime
+                    model.currentTime
 
                 events2 =
                     Log.dateFilter today model.dateFilter currentLog.data
@@ -596,7 +610,7 @@ viewLog model =
 
                 events : List Event
                 events =
-                    groupingFilter model.timeZoneOffset model.filterState events2
+                    groupingFilter model.filterState events2
 
                 nEvents =
                     List.length events |> toFloat
@@ -617,11 +631,11 @@ viewLog model =
                           , width = px 80
 
                           --, view = \k event -> el [ Font.size 12 ] (text <| dateStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
-                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.dateStringOfDateTimeString <| (\ndt -> DateTime.humanDateFromNaiveDateTime ndt) <| event.insertedAt)
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
                           }
                         , { header = el [ Font.bold ] (text "Time")
                           , width = px 80
-                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.timeStringOfDateTimeString <| (\(NaiveDateTime str) -> str) <| event.insertedAt)
+                          , view = \k event -> el [ Font.size 12 ] (text <| DateTime.naiveDateStringFromPosix <| event.insertedAt)
                           }
                         , { header = el [ Font.bold ] (text "Value")
                           , width = px 40

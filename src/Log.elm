@@ -3,7 +3,6 @@ module Log exposing
     , Event
     , EventGrouping(..)
     , Log
-    , correctTimeZone
     , dateFilter
     , eventSum
     , eventsByDay
@@ -11,7 +10,7 @@ module Log exposing
     , groupingFilter
     )
 
-import DateTime exposing (NaiveDateTime(..))
+import DateTime exposing (NaiveDateTime(..), rataDieFromNaiveDateTime)
 import List.Extra as LE
 import Time exposing (Posix)
 import TypedTime exposing (TypedTime(..), Unit(..))
@@ -19,6 +18,7 @@ import TypedTime exposing (TypedTime(..), Unit(..))
 
 type alias Log =
     { id : Int
+    , counter : Int
     , name : String
     , note : String
     , userId : Int
@@ -42,11 +42,9 @@ type Duration
 
 type alias Event =
     { id : Int
-    , name : String
     , note : String
-    , startTime : NaiveDateTime
     , duration : TypedTime
-    , insertedAt : NaiveDateTime
+    , insertedAt : Posix
     }
 
 
@@ -55,14 +53,43 @@ filter filterString logs =
     List.filter (\log -> String.contains (String.toLower filterString) (String.toLower log.name)) logs
 
 
-dateFilter : String -> DateFilter -> List Event -> List Event
-dateFilter todayAsString dateFilter_ eventList =
+dateFilter : Posix -> DateFilter -> List Event -> List Event
+dateFilter today dateFilter_ eventList =
     case dateFilter_ of
         NoDateFilter ->
             eventList
 
         FilterByLast k ->
-            List.filter (\event -> DateTime.inLastNDaysBeforeDate todayAsString k (DateTime.naiveDateTimeValue event.insertedAt) == Just True) eventList
+            let
+                aWhileAgo =
+                    shiftPosix (-86400.0 * toFloat k) today
+            in
+            List.filter (\event -> posixInterval event.insertedAt aWhileAgo > 0) eventList
+
+
+shiftPosix : Float -> Posix -> Posix
+shiftPosix t p =
+    ((Time.posixToMillis p |> toFloat) + (1000.0 * t))
+        |> round
+        |> Time.millisToPosix
+
+
+{-| Intervale betwen two Posix times in Seconds
+-}
+posixInterval : Posix -> Posix -> Float
+posixInterval p_ q_ =
+    let
+        p =
+            Time.posixToMillis p_ |> toFloat
+
+        q =
+            Time.posixToMillis q_ |> toFloat
+    in
+    (p - q) / 1000.0
+
+
+
+-- seconds
 
 
 eventSum : List Event -> TypedTime
@@ -72,57 +99,61 @@ eventSum eventList =
         |> TypedTime.sum
 
 
-groupingFilter : Int -> EventGrouping -> List Event -> List Event
-groupingFilter timeZoneOffset eventGrouping eventList =
+groupingFilter : EventGrouping -> List Event -> List Event
+groupingFilter eventGrouping eventList =
     case eventGrouping of
         NoGrouping ->
-            correctTimeZone timeZoneOffset eventList
+            eventList
 
         GroupByDay ->
-            eventsByDay timeZoneOffset eventList
+            eventsByDay eventList
 
 
-eventsByDay : Int -> List Event -> List Event
-eventsByDay timeZoneOffset list =
+eventsByDay : List Event -> List Event
+eventsByDay list =
+    let
+        referenceDT =
+            Time.millisToPosix 0
+    in
     list
-        |> List.map (\r -> offsetTimeZone timeZoneOffset r)
+        --|> List.map (\r -> offsetTimeZone timeZoneOffset r)
         |> timeSeries
         |> timeSeriesRD
         |> List.sortBy Tuple.first
-        |> fillGaps ( NaiveDateTime "", 0 )
+        |> fillGaps ( referenceDT, 0 )
         |> group
         |> List.map sumList2
 
 
-correctTimeZone : Int -> List Event -> List Event
-correctTimeZone timeZoneOffset list =
-    list
-        |> List.map (\r -> offsetTimeZone timeZoneOffset r)
+
+-- correctTimeZone : Int -> List Event -> List Event
+-- correctTimeZone timeZoneOffset list =
+--     list
+--         |> List.map (\r -> offsetTimeZone timeZoneOffset r)
+--
+-- offsetTi©meZone : Int -> Event -> Event
+-- offsetTimeZone offset event =
+--     let
+--         (NaiveDateTime str) =
+--             event.insertedAt
+--     in
+--     { event | insertedAt = NaiveDateTime (DateTime.offsetDateTimeStringByHours offset str) }
 
 
-offsetTimeZone : Int -> Event -> Event
-offsetTimeZone offset event =
-    let
-        (NaiveDateTime str) =
-            event.insertedAt
-    in
-    { event | insertedAt = NaiveDateTime (DateTime.offsetDateTimeStringByHours offset str) }
-
-
-timeSeries : List Event -> List ( NaiveDateTime, Float )
+timeSeries : List Event -> List ( Posix, Float )
 timeSeries eventList =
     eventList
         |> List.map (\event -> ( event.insertedAt, event.duration |> TypedTime.convertToSeconds ))
 
 
-timeSeriesRD : List ( NaiveDateTime, Float ) -> List ( Int, ( NaiveDateTime, Float ) )
+timeSeriesRD : List ( Posix, Float ) -> List ( Int, ( Posix, Float ) )
 timeSeriesRD listOfPairs =
     List.map augmentPair listOfPairs
 
 
-augmentPair : ( NaiveDateTime, Float ) -> ( Int, ( NaiveDateTime, Float ) )
-augmentPair ( ndt, f ) =
-    ( rataDie ndt, ( ndt, f ) )
+augmentPair : ( Posix, Float ) -> ( Int, ( Posix, Float ) )
+augmentPair ( p, f ) =
+    ( DateTime.rataDieFromPosix p, ( p, f ) )
 
 
 filterValues : List ( a, Maybe b ) -> List ( a, b )
@@ -176,12 +207,15 @@ fillGaps default list =
 
 
 sumList2 :
-    List ( Int, ( NaiveDateTime, Float ) )
+    List ( Int, ( Posix, Float ) )
     -> Event
 sumList2 list =
     let
         head =
             List.head list
+
+        referenceDT =
+            Time.millisToPosix 0
 
         index : Int
         index =
@@ -190,18 +224,16 @@ sumList2 list =
         tuple =
             Maybe.map Tuple.second head
 
-        dt : NaiveDateTime
+        dt : Posix
         dt =
-            Maybe.map Tuple.first tuple |> Maybe.withDefault (NaiveDateTime "2000-01-010T00:00:00")
+            Maybe.map Tuple.first tuple |> Maybe.withDefault referenceDT
 
         sum : Float
         sum =
             List.map (Tuple.second >> Tuple.second) list |> List.sum
     in
     { id = index + 1
-    , name = "foo"
     , note = "--"
-    , startTime = dt
     , duration = TypedTime Seconds sum
     , insertedAt = dt
     }

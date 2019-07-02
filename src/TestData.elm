@@ -9,27 +9,24 @@ import TypedTime exposing (..)
 e1 : Event
 e1 =
     { id = 1
-    , name = "Scales"
     , note = "--"
-    , startTime = DateTime.NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
     , duration = TypedTime Minutes 11.4
-    , insertedAt = NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
+    , insertedAt = Time.millisToPosix 1561993648
     }
 
 
 e2 : Event
 e2 =
-    { id = 1
-    , name = "Finger exercises"
+    { id = 2
     , note = "--"
-    , startTime = NaiveDateTime <| DateTime.naiveDateStringFromPosix (Time.millisToPosix 1561993648)
     , duration = TypedTime Minutes 4.1
-    , insertedAt = NaiveDateTime <| DateTime.naiveDateStringFromPosix <| Time.millisToPosix 1561993648
+    , insertedAt = Time.millisToPosix 1561993648
     }
 
 
 type alias Log =
     { id : Int
+    , counter : Int
     , name : String
     , note : String
     , userId : Int
@@ -39,6 +36,7 @@ type alias Log =
 
 log =
     { id = 1
+    , counter = 2
     , name = "Piano practice"
     , note = "Practice for recital"
     , userId = 1

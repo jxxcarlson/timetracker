@@ -8,10 +8,13 @@ module DateTime exposing
     , inLastNDaysBeforeDate
     , isoStringFromNaiveDateTime
     , naiveDateStringFromPosix
+    , naiveDateTimeFromPosix
     , naiveDateTimeValue
     , offsetDateTimeStringByHours
     , posixFromNaiveDateString
+    , posixFromNaiveDateTime
     , rataDieFromNaiveDateTime
+    , rataDieFromPosix
     , timeStringOfDateTimeString
     )
 
@@ -76,7 +79,7 @@ offsetDateTimeStringByHours k str =
                     ""
 
         posix_ =
-            posixfromNaiveDateTimeString str
+            posixIntfromNaiveDateTimeString str
 
         shiftedDateString =
             Date.fromPosix Time.utc (Time.millisToPosix ((posix_ + k * 3600) * 1000)) |> Date.toIsoString
@@ -203,6 +206,16 @@ naiveDateStringFromPosix posix =
     y ++ "-" ++ m ++ "-" ++ d
 
 
+naiveDateTimeFromPosix : Posix -> NaiveDateTime
+naiveDateTimeFromPosix posix =
+    NaiveDateTime (naiveDateStringFromPosix posix)
+
+
+rataDieFromPosix : Posix -> Int
+rataDieFromPosix posix =
+    posix |> naiveDateStringFromPosix |> rataDieFromNaiveDateTime
+
+
 monthToString : Time.Month -> String
 monthToString m =
     case m of
@@ -243,13 +256,24 @@ monthToString m =
             "12"
 
 
-posixFromNaiveDateString str =
+posixIntFromNaiveDateString : String -> Int
+posixIntFromNaiveDateString str =
     case dateFromNaiveDateTime str of
         Err _ ->
             0
 
         Ok result ->
             (Date.toRataDie result - 719163) * 86400
+
+
+posixFromNaiveDateString : String -> Posix
+posixFromNaiveDateString str =
+    Time.millisToPosix <| posixIntFromNaiveDateString str
+
+
+posixFromNaiveDateTime : NaiveDateTime -> Posix
+posixFromNaiveDateTime (NaiveDateTime str) =
+    posixFromNaiveDateString str
 
 
 posixFromTimeString str =
@@ -271,10 +295,10 @@ posixFromTimeString str =
             h + m + s
 
 
-posixfromNaiveDateTimeString str =
+posixIntfromNaiveDateTimeString str =
     case String.split "T" str of
         [ dd, tt ] ->
-            posixFromNaiveDateString dd + posixFromTimeString tt
+            posixIntFromNaiveDateString dd + posixFromTimeString tt
 
         _ ->
             0

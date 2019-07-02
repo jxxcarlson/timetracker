@@ -24,8 +24,15 @@ import Time exposing (Posix)
 import TypedTime exposing (..)
 
 
+
+--
+-- TYPES
+--
+
+
 type AppMode
-    = Logging
+    = DisplayLogs
+    | Logging
     | Editing
 
 
@@ -49,6 +56,12 @@ type TimerCommand
     | TCReset
 
 
+
+--
+-- MAIN
+--
+
+
 main =
     Browser.element
         { init = init
@@ -67,7 +80,7 @@ main =
 type alias Model =
     { input : String
     , message : String
-    , valueString : String
+    , eventDurationString : String
     , logs : List Log
     , maybeCurrentLog : Maybe Log
     , maybeCurrentEvent : Maybe Event
@@ -86,11 +99,17 @@ type alias Model =
     }
 
 
+
+--
+-- INIT
+--
+
+
 init : Flags -> ( Model, Cmd Msg )
 init flags =
     ( { input = "App started"
       , message = "App started"
-      , valueString = ""
+      , eventDurationString = ""
       , logs = [ TestData.log ]
       , maybeCurrentLog = Just TestData.log
       , maybeCurrentEvent = Just TestData.e1
@@ -151,8 +170,9 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
+        -- EVENTS
         GotValueString str ->
-            ( { model | valueString = str }, Cmd.none )
+            ( { model | eventDurationString = str }, Cmd.none )
 
         GetEvents logId ->
             let
@@ -177,7 +197,7 @@ update msg model =
                     ( { model | message = "No log available to make event" }, Cmd.none )
 
                 Just log ->
-                    case TypedTime.decodeHM model.valueString of
+                    case TypedTime.decodeHM model.eventDurationString of
                         Nothing ->
                             ( { model | message = "Bad format for time" }, Cmd.none )
 
@@ -186,6 +206,7 @@ update msg model =
                             , makeEvent log.id duration
                             )
 
+        -- TIMER
         TimeChange time ->
             ( { model
                 | currentTime = time
@@ -532,7 +553,7 @@ getScaleFactor model =
 newEventPanel : Int -> Model -> Element Msg
 newEventPanel w model =
     column [ Border.width 1, padding 12, spacing 24, width (px w) ]
-        [ row [ spacing 12 ] [ submitEventButton, inputValue model ]
+        [ row [ spacing 12 ] [ submitEventButton, inputEventDuration model ]
         , largeElapsedTimePanel model
         ]
 
@@ -543,10 +564,10 @@ newEventPanel w model =
 --
 
 
-inputValue model =
+inputEventDuration model =
     Input.text inputStyle
         { onChange = GotValueString
-        , text = model.valueString
+        , text = model.eventDurationString
         , placeholder = Nothing
         , label = Input.labelLeft [ Font.size 14, moveDown 8 ] (text "")
         }
@@ -730,6 +751,9 @@ logNameButton currentLog log =
 indexWidth : AppMode -> Int
 indexWidth appMode =
     case appMode of
+        DisplayLogs ->
+            30
+
         Logging ->
             30
 
@@ -740,6 +764,9 @@ indexWidth appMode =
 indexButton : Model -> Int -> Event -> Element Msg
 indexButton model k event =
     case model.appMode of
+        DisplayLogs ->
+            el [ Font.size 12 ] (text <| String.fromInt <| k + 1)
+
         Logging ->
             el [ Font.size 12 ] (text <| String.fromInt <| k + 1)
 

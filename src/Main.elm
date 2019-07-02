@@ -9,6 +9,7 @@ module Main exposing (main)
 import Browser
 import Date exposing (Date)
 import DateTime exposing (NaiveDateTime(..))
+import Dict
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
@@ -74,9 +75,9 @@ type alias Model =
     , appMode : AppMode
     , beginTime : Maybe Posix
     , currentTime : Posix
-    , elapsedTime : Float
+    , elapsedTime : TypedTime
+    , accumulatedTime : TypedTime
     , doUpdateElapsedTime : Bool
-    , accumulatedTime : Float
     , timerState : TimerState
     , dateFilter : DateFilter
     , timeZoneOffset : Int
@@ -98,8 +99,8 @@ init flags =
       , currentTime = Time.millisToPosix 0
       , beginTime = Nothing
       , doUpdateElapsedTime = False
-      , elapsedTime = 0
-      , accumulatedTime = 0
+      , elapsedTime = TypedTime Seconds 0
+      , accumulatedTime = TypedTime Seconds 0
       , dateFilter = NoDateFilter
       , timeZoneOffset = 5
       , timerState = TSInitial
@@ -123,13 +124,9 @@ type Msg
     | SetGroupFilter EventGrouping
     | SetUnits Unit
       --
+    | TimeChange Posix
     | TC TimerCommand
-    | UpdateTime Posix
     | UpdateElapsedTime Float
-    | BeginTimer
-    | PauseTimer
-    | ContinueTimer
-    | ResetTimer
     | GotValueString String
     | MakeEvent
 
@@ -139,7 +136,7 @@ type alias Flags =
 
 
 subscriptions model =
-    Sub.none
+    Time.every 1000 TimeChange
 
 
 
@@ -189,12 +186,12 @@ update msg model =
                             , makeEvent log.id duration
                             )
 
-        UpdateTime time ->
+        TimeChange time ->
             ( { model
                 | currentTime = time
                 , elapsedTime =
                     if model.doUpdateElapsedTime then
-                        elapsedTimeInSeconds model
+                        elapsedTypedTime model
 
                     else
                         model.elapsedTime
@@ -203,36 +200,40 @@ update msg model =
             )
 
         UpdateElapsedTime et ->
-            ( { model | elapsedTime = et }, Cmd.none )
-
-        BeginTimer ->
-            ( { model | beginTime = Just model.currentTime, elapsedTime = 0, accumulatedTime = 0, doUpdateElapsedTime = True }, Cmd.none )
-
-        PauseTimer ->
-            ( { model
-                | beginTime = Just model.currentTime
-                , elapsedTime = 0
-                , doUpdateElapsedTime = False
-              }
-            , Cmd.none
-            )
-
-        ContinueTimer ->
-            ( { model | beginTime = Just model.currentTime, doUpdateElapsedTime = True }, Cmd.none )
-
-        ResetTimer ->
-            ( { model | beginTime = Just model.currentTime, doUpdateElapsedTime = False, elapsedTime = 0, accumulatedTime = 0 }, Cmd.none )
+            ( { model | elapsedTime = TypedTime Seconds et }, Cmd.none )
 
         TC timerCommand ->
             case timerCommand of
                 TCStart ->
-                    ( { model | timerState = TSRunning }, Cmd.none )
+                    ( { model
+                        | beginTime = Just model.currentTime
+                        , elapsedTime = TypedTime Seconds 0
+                        , accumulatedTime = TypedTime Seconds 0
+                        , doUpdateElapsedTime = True
+                        , timerState = TSRunning
+                      }
+                    , Cmd.none
+                    )
 
                 TCPause ->
-                    ( { model | timerState = TSPaused }, Cmd.none )
+                    ( { model
+                        | beginTime = Just model.currentTime
+                        , accumulatedTime = TypedTime.sum [ model.accumulatedTime, model.elapsedTime ]
+                        , elapsedTime = TypedTime Seconds 0
+                        , doUpdateElapsedTime = False
+                        , timerState = TSPaused
+                      }
+                    , Cmd.none
+                    )
 
                 TCContinue ->
-                    ( { model | timerState = TSRunning }, Cmd.none )
+                    ( { model
+                        | timerState = TSRunning
+                        , beginTime = Just model.currentTime
+                        , doUpdateElapsedTime = True
+                      }
+                    , Cmd.none
+                    )
 
                 TCLog ->
                     let
@@ -242,12 +243,20 @@ update msg model =
                                     Cmd.none
 
                                 Just log ->
-                                    makeEvent log.id (TypedTime.convertScalarToSecondsWithUnit model.outputUnit (model.accumulatedTime + model.elapsedTime))
+                                    makeEvent log.id (TypedTime.convertToSeconds <| TypedTime.sum [ model.accumulatedTime, model.elapsedTime ])
                     in
                     ( { model | timerState = TSInitial }, cmd )
 
                 TCReset ->
-                    ( { model | timerState = TSInitial }, Cmd.none )
+                    ( { model
+                        | beginTime = Just model.currentTime
+                        , doUpdateElapsedTime = False
+                        , elapsedTime = TypedTime Seconds 0
+                        , accumulatedTime = TypedTime Seconds 0
+                        , timerState = TSInitial
+                      }
+                    , Cmd.none
+                    )
 
 
 makeEvent : Int -> Float -> Cmd Msg
@@ -416,9 +425,16 @@ logTimerButton =
 
 
 timerDisplay model =
+    let
+        t1 =
+            TypedTime.sum [ model.elapsedTime, model.accumulatedTime ]
+
+        t2 =
+            TypedTime.multiply (1 / scaleFactor) t1
+    in
     row [ spacing 8 ]
         [ el [ Font.size 36, Font.bold, padding 8, Font.color Style.red, Background.color Style.black ]
-            (text <| timeStringFromFloat <| (model.accumulatedTime + model.elapsedTime) / scaleFactor)
+            (text <| TypedTime.timeAsStringWithUnit Seconds t1)
         ]
 
 
@@ -532,39 +548,24 @@ inputStyle =
     ]
 
 
-elapsedTimeInSeconds : Model -> Float
-elapsedTimeInSeconds model =
+elapsedTypedTime : Model -> TypedTime
+elapsedTypedTime model =
     case model.beginTime of
         Nothing ->
-            0
+            TypedTime Seconds 0
 
         Just bt ->
             let
-                seconds2 =
+                milliSeconds2 =
                     Time.posixToMillis model.currentTime |> toFloat
 
-                seconds1 =
+                milliSeconds1 =
                     Time.posixToMillis bt |> toFloat
 
                 dt =
-                    seconds2 - seconds1
+                    (milliSeconds2 - milliSeconds1) / 1000.0
             in
-            dt / 1000.0
-
-
-
---         --     , eventListDisplay model
---         --     , case model.appMode of
---         --         Logging ->
---         --             eventPanel model
---         --
---         --         Editing ->
---         --             editPanel model
---         --     ]
---         -- , controlPanel model
---         ]
---
---
+            TypedTime Seconds dt
 
 
 eventListDisplay : Model -> Element Msg
